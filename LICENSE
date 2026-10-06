@@ -20,8 +20,3 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
----
-
-This license covers Motion Studio's own code. Third-party dependencies keep their own licenses.
-In particular, Remotion (https://www.remotion.dev) is free for individuals and companies of up to
-three people; larger companies need a Remotion company license — see https://www.remotion.dev/license.
