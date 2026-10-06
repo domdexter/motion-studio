@@ -1,0 +1,32 @@
+# dependencies
+node_modules/
+
+# next.js
+.next/
+out/
+build/
+dist/
+next-env.d.ts
+*.tsbuildinfo
+
+# env / secrets (never commit)
+.env
+.env.local
+.env*.local
+
+# local production data (large binaries live here)
+/projects/*
+!/projects/.gitkeep
+/storage/*
+!/storage/.gitkeep
+
+# generated
+/src/generated/
+coverage/
+
+# misc
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+.turbo

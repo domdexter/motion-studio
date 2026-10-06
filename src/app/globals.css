@@ -1,0 +1,216 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+
+  /* Studio surfaces & semantic states */
+  --color-panel: var(--panel);
+  --color-panel-raised: var(--panel-raised);
+  --color-canvas: var(--canvas);
+  --color-hairline: var(--hairline);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-stale: var(--stale);
+  --color-track-voice: var(--track-voice);
+  --color-track-scene: var(--track-scene);
+  --color-track-music: var(--track-music);
+  --color-keyframe: var(--keyframe);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* Light appearance. The video canvas (players, thumbnails) stays dark in both themes. */
+:root {
+  --background: #f6f6f8;
+  --foreground: #17171c;
+  --card: #ffffff;
+  --card-foreground: #17171c;
+  --popover: #ffffff;
+  --popover-foreground: #17171c;
+  --primary: #6352ee;
+  --primary-foreground: #ffffff;
+  --secondary: #ededf2;
+  --secondary-foreground: #17171c;
+  --muted: #efeff3;
+  --muted-foreground: #676773;
+  --accent: #eaeaf0;
+  --accent-foreground: #17171c;
+  --destructive: #d9364a;
+  --border: #e2e2e9;
+  --input: #d9d9e1;
+  --ring: #6352ee;
+  --chart-1: #6352ee;
+  --chart-2: #0b9fc0;
+  --chart-3: #d98300;
+  --chart-4: #12a06a;
+  --chart-5: #e0485f;
+  --radius: 0.5rem;
+  --sidebar: #fbfbfc;
+  --sidebar-foreground: #3a3a44;
+  --sidebar-primary: #6352ee;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #ececf1;
+  --sidebar-accent-foreground: #17171c;
+  --sidebar-border: #e5e5eb;
+  --sidebar-ring: #6352ee;
+
+  --panel: #fbfbfc;
+  --panel-raised: #ffffff;
+  --canvas: #ececf0;
+  --hairline: rgba(0, 0, 0, 0.07);
+  --success: #12995f;
+  --warning: #c27700;
+  --info: #2a78d8;
+  --stale: #d46a0e;
+  --track-voice: #0898b6;
+  --track-scene: #6352ee;
+  --track-music: #12995f;
+  --keyframe: #c8307a;
+  --scrollbar-thumb: #cdcdd6;
+  --checker-a: #f1f1f5;
+  --checker-b: #e3e3e9;
+  color-scheme: light;
+}
+
+.dark {
+  --background: #09090b;
+  --foreground: #ececf0;
+  --card: #111114;
+  --card-foreground: #ececf0;
+  --popover: #16161a;
+  --popover-foreground: #ececf0;
+  --primary: #7c6cff;
+  --primary-foreground: #ffffff;
+  --secondary: #1b1b20;
+  --secondary-foreground: #ececf0;
+  --muted: #17171b;
+  --muted-foreground: #8c8c97;
+  --accent: #1e1e24;
+  --accent-foreground: #ececf0;
+  --destructive: #f0525f;
+  --border: #232329;
+  --input: #2a2a31;
+  --ring: #7c6cff;
+  --chart-1: #7c6cff;
+  --chart-2: #3dd6f5;
+  --chart-3: #ffb547;
+  --chart-4: #3ddc97;
+  --chart-5: #ff5c73;
+  --radius: 0.5rem;
+  --sidebar: #0d0d10;
+  --sidebar-foreground: #c9c9d1;
+  --sidebar-primary: #7c6cff;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1a1a1f;
+  --sidebar-accent-foreground: #ececf0;
+  --sidebar-border: #1f1f25;
+  --sidebar-ring: #7c6cff;
+
+  --panel: #0f0f12;
+  --panel-raised: #141418;
+  --canvas: #050506;
+  --hairline: rgba(255, 255, 255, 0.06);
+  --success: #3ddc97;
+  --warning: #f5b547;
+  --info: #4ea8ff;
+  --stale: #f59e3b;
+  --track-voice: #3dd6f5;
+  --track-scene: #7c6cff;
+  --track-music: #3ddc97;
+  --keyframe: #f06ba8;
+  --scrollbar-thumb: #26262c;
+  --checker-a: #0b0b0e;
+  --checker-b: #111115;
+  color-scheme: dark;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  html {
+    @apply font-sans;
+  }
+}
+
+@layer utilities {
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+  .checkerboard {
+    background-color: var(--checker-a);
+    background-image:
+      linear-gradient(45deg, var(--checker-b) 25%, transparent 25%),
+      linear-gradient(-45deg, var(--checker-b) 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, var(--checker-b) 75%),
+      linear-gradient(-45deg, transparent 75%, var(--checker-b) 75%);
+    background-size: 16px 16px;
+    background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

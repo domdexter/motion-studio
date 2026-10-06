@@ -1,0 +1,699 @@
+// Motion Studio database schema.
+//
+// Principles (see PROJECT_SCHEMA.md):
+// - Postgres stores metadata, relationships, revisions and history.
+// - Large binaries (audio, images, video, renders) live in the project folder on disk;
+//   rows store paths relative to that folder plus a content hash.
+// - Creative documents that are always read/written as a whole (brand, design system,
+//   scene specs, word timings) are JSON columns validated with zod in src/core/spec.
+// - Every derived artifact records the identity of its inputs, so staleness is computed
+//   from real state instead of being assigned by hand.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// A video production.
+model Project {
+  id           String    @id
+  name         String
+  description  String    @default("")
+  /// How the project was started: script_only | audio_only | script_audio | script_audio_timeline | imported | blank
+  workflow     String
+  /// landscape_16_9 | vertical_9_16 | square_1_1 | portrait_4_5 | custom
+  formatPreset String
+  width        Int
+  height       Int
+  fps          Int       @default(30)
+  brief        String    @default("")
+  /// BrandProfile (zod: BrandProfileSchema)
+  brand        Json
+  /// DesignSystem (zod: DesignSystemSchema) — motion/typography/color tokens every scene inherits
+  design       Json
+  /// Creative markers (beats/notes) placed on the timeline. Never part of the audio timing.
+  markers      Json      @default("[]")
+  /// Voice track mix: { volume, muted }
+  mix          Json      @default("{\"volume\":1,\"muted\":false}")
+
+  activeVoiceTakeId  String? @unique
+  activeTranscriptId String? @unique
+  activeTimelineId   String? @unique
+  /// Decision recorded when the voice-over changed under an existing storyboard.
+  timelineDecision   Json?
+
+  thumbnailPath String?
+  /// Monotonic counter bumped on every mutation; drives GUI <-> Claude Code sync.
+  revision      Int       @default(0)
+  archivedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  activeVoiceTake  VoiceTake?  @relation("ActiveVoiceTake", fields: [activeVoiceTakeId], references: [id], onDelete: SetNull)
+  activeTranscript Transcript? @relation("ActiveTranscript", fields: [activeTranscriptId], references: [id], onDelete: SetNull)
+  activeTimeline   Timeline?   @relation("ActiveTimeline", fields: [activeTimelineId], references: [id], onDelete: SetNull)
+
+  scriptRevisions     ScriptRevision[]
+  voiceTakes          VoiceTake[]          @relation("ProjectVoiceTakes")
+  transcripts         Transcript[]         @relation("ProjectTranscripts")
+  timelines           Timeline[]           @relation("ProjectTimelines")
+  storyboardRevisions StoryboardRevision[]
+  scenes              Scene[]
+  assets              Asset[]
+  assetRequests       AssetRequest[]
+  audioTracks         AudioTrack[]
+  overlayClips        OverlayClip[]
+  renders             Render[]
+  jobs                Job[]
+  aiTasks             AiTask[]
+  snapshots           ProjectSnapshot[]
+  activities          Activity[]
+  syncIssues          SyncIssue[]
+  creativeRevisions   CreativeRevision[]
+  creativeReviews     CreativeReview[]
+  editSteps           EditStep[]
+
+  /// Brand kit this project follows (Settings → Brand kits). Null = a custom brand for this project.
+  brandKitId      String?
+  /// Kit version last copied into this project.
+  brandKitVersion Int?
+  brandKit        BrandKit? @relation(fields: [brandKitId], references: [id], onDelete: SetNull)
+
+  @@index([archivedAt])
+  @@index([updatedAt])
+  @@index([brandKitId])
+}
+
+/// Reusable brand kit managed in Settings: identity, design system and brand files. Projects that
+/// follow a kit receive a synced copy (files are copied in as project assets), re-synced on every change.
+model BrandKit {
+  id          String   @id
+  name        String
+  description String   @default("")
+  /// BrandProfile — its asset ids reference BrandKitFile ids
+  brand       Json
+  /// DesignSystem
+  design      Json
+  /// Bumped when identity or design change; linked projects record the version they synced.
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  files    BrandKitFile[]
+  projects Project[]
+}
+
+model BrandKitFile {
+  id          String   @id
+  brandKitId  String
+  /// logo | font | brand_guide | reference
+  kind        String
+  name        String
+  fileName    String
+  /// Relative to storage/brand-kits/<brandKitId>/
+  filePath    String
+  mimeType    String
+  sizeBytes   Int
+  contentHash String
+  width       Int?
+  height      Int?
+  createdAt   DateTime @default(now())
+
+  brandKit BrandKit @relation(fields: [brandKitId], references: [id], onDelete: Cascade)
+
+  @@index([brandKitId])
+}
+
+/// A scene design saved for reuse in any project (a whole scene, or a few elements such as a lower
+/// third). Images and videos it uses are copied to storage/scene-templates/<id>/ and imported into the
+/// project the template is applied to.
+model SceneTemplate {
+  id              String   @id
+  name            String
+  description     String   @default("")
+  /// scene | elements
+  kind            String
+  /// SceneSpec (kind scene) or { elements: SceneElement[] } (kind elements)
+  spec            Json
+  /// [{ assetId, kind, name, fileName, filePath, mimeType, contentHash }]
+  files           Json     @default("[]")
+  sourceProjectId String?
+  sourceSceneKey  String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+/// Every saved script is a new revision. The current script is the highest version.
+model ScriptRevision {
+  id             String    @id @default(cuid())
+  projectId      String
+  version        Int
+  content        String
+  /// sha256 of whitespace-normalized text; trivial re-saves do not invalidate the voice.
+  contentHash    String
+  /// user | import | claude | file | transcript
+  source         String
+  note           String    @default("")
+  /// ScriptAnalysis (beats, emphasis, visual opportunities). Timing inside is ESTIMATED only.
+  analysis       Json?
+  /// rules | claude
+  analysisSource String?
+  analyzedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, version])
+}
+
+/// A voice-over revision (generated or imported). Exactly one can be active per project.
+model VoiceTake {
+  id               String   @id @default(cuid())
+  projectId        String
+  version          Int
+  /// elevenlabs | system_tts | import
+  source           String
+  label            String   @default("")
+  /// Relative to the project folder, e.g. audio/voice/v2.mp3
+  filePath         String
+  mimeType         String
+  sizeBytes        Int
+  contentHash      String
+  durationSec      Float
+  sampleRate       Int?
+  channels         Int?
+  peaksPath        String?
+  /// For generated voices: which script produced this audio.
+  scriptRevisionId String?
+  scriptHash       String?
+  inputText        String?
+  voiceId          String?
+  voiceName        String?
+  modelId          String?
+  settings         Json?
+  providerMeta     Json?
+  createdAt        DateTime @default(now())
+
+  project     Project      @relation("ProjectVoiceTakes", fields: [projectId], references: [id], onDelete: Cascade)
+  activeFor   Project?     @relation("ActiveVoiceTake")
+  transcripts Transcript[]
+
+  @@unique([projectId, version])
+}
+
+/// Normalized word-level timing for a voice take, regardless of where it came from.
+model Transcript {
+  id             String   @id @default(cuid())
+  projectId      String
+  voiceTakeId    String
+  version        Int
+  /// elevenlabs_tts | elevenlabs_forced_alignment | elevenlabs_stt | whisper_cpp | system_tts | import_json | import_srt | import_vtt | manual
+  source         String
+  text           String
+  language       String?
+  wordCount      Int
+  durationSec    Float
+  /// TimedWord[] (zod: TimedWordSchema)
+  words          Json
+  /// Character-level timings (when the provider returns them) stored as a JSON file.
+  charactersPath String?
+  /// Raw provider response, kept for audit/debugging.
+  rawPath        String?
+  /// { loss?, interpolatedWords?, matchedRatio? }
+  quality        Json?
+  /// { cues? (imported subtitle segments), spoken? ({ text, words } when words carry script wording), originalFile?, warnings? }
+  meta           Json?
+  parentId       String?
+  note           String   @default("")
+  createdAt      DateTime @default(now())
+
+  project   Project    @relation("ProjectTranscripts", fields: [projectId], references: [id], onDelete: Cascade)
+  activeFor Project?   @relation("ActiveTranscript")
+  voiceTake VoiceTake  @relation(fields: [voiceTakeId], references: [id], onDelete: Cascade)
+  timelines Timeline[]
+
+  @@unique([projectId, version])
+}
+
+/// Audio-derived (or imported) master timeline: sentences, phrases, paragraphs, pauses.
+model Timeline {
+  id           String   @id @default(cuid())
+  projectId    String
+  version      Int
+  transcriptId String?
+  /// derived | imported
+  source       String
+  durationSec  Float
+  /// TimelineData (zod: TimelineDataSchema)
+  data         Json
+  note         String   @default("")
+  createdAt    DateTime @default(now())
+
+  project    Project     @relation("ProjectTimelines", fields: [projectId], references: [id], onDelete: Cascade)
+  activeFor  Project?    @relation("ActiveTimeline")
+  transcript Transcript? @relation(fields: [transcriptId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, version])
+}
+
+/// Snapshot of all scenes whenever a storyboard is generated, applied or restored.
+model StoryboardRevision {
+  id         String   @id @default(cuid())
+  projectId  String
+  version    Int
+  timelineId String?
+  /// rules | claude | user | file | restore
+  source     String
+  note       String   @default("")
+  scenes     Json
+  createdAt  DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, version])
+}
+
+/// A scene: storyboard intent (voiceText, visualConcept, ...) + Remotion spec + timing.
+model Scene {
+  id                  String    @id @default(cuid())
+  projectId           String
+  /// Human key that always matches display order: scene_01, scene_02, ...
+  key                 String
+  order               Int
+  name                String
+  startSec            Float
+  endSec              Float
+  /// audio_locked: boundaries derived from word anchors | user_adjusted: absolute seconds set by the user
+  timingMode          String
+  /// Word anchor range [wordStart, wordEnd) into the transcript the timing came from.
+  wordStart           Int?
+  wordEnd             Int?
+  timelineId          String?
+  voiceText           String    @default("")
+  visualConcept       String    @default("")
+  /// motion_graphic | kinetic_type | ui_demo | data_viz | image | video | logo | mixed
+  visualType          String    @default("motion_graphic")
+  animationNotes      Json      @default("[]")
+  onScreenText        String    @default("")
+  assetsRequired      Json      @default("[]")
+  notes               String    @default("")
+  /// SceneSpec (zod: SceneSpecSchema) interpreted by the Remotion engine.
+  spec                Json
+  /// SceneCreative (zod: SceneCreativeSchema): purpose, beat, metaphor, treatment, composition, motion, shots. Null = no creative intent recorded.
+  creative            Json?
+  /// draft | approved
+  status              String    @default("draft")
+  locked              Boolean   @default(false)
+  approvedAt          DateTime?
+  /// Fingerprint of spec + timing + referenced asset hashes at approval time.
+  approvedFingerprint String?
+  version             Int       @default(1)
+  /// rules | claude | user | file
+  source              String    @default("user")
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versions      SceneVersion[]
+  assets        Asset[]
+  assetRequests AssetRequest[]
+
+  @@unique([projectId, key])
+  @@index([projectId, order])
+}
+
+model SceneVersion {
+  id        String   @id @default(cuid())
+  sceneId   String
+  version   Int
+  snapshot  Json
+  /// user | claude | rules | file | restore | system
+  source    String
+  message   String   @default("")
+  createdAt DateTime @default(now())
+
+  scene Scene @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+
+  @@unique([sceneId, version])
+}
+
+/// A file in the project asset library.
+model Asset {
+  id          String   @id
+  projectId   String
+  /// image | video | audio | music | sfx | logo | font | screenshot | icon | brand_guide | reference
+  kind        String
+  /// upload | claude | elevenlabs | render | import | hyperframes
+  source      String
+  name        String
+  fileName    String
+  filePath    String
+  mimeType    String
+  sizeBytes   Int
+  contentHash String
+  width       Int?
+  height      Int?
+  durationSec Float?
+  prompt      String?
+  generator   String?
+  requestId   String?
+  sceneId     String?
+  tags        Json     @default("[]")
+  meta        Json?
+  /// ready | approved | rejected
+  status      String   @default("ready")
+  /// Bumped when the file is replaced (keeps the id stable for scene specs).
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scene       Scene?        @relation(fields: [sceneId], references: [id], onDelete: SetNull)
+  request     AssetRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  audioTracks  AudioTrack[]
+  overlayClips OverlayClip[]
+
+  @@index([projectId, kind])
+}
+
+/// An AI asset generation request fulfilled by Claude Code (requested -> generating -> generated -> approved | rejected).
+model AssetRequest {
+  id              String   @id
+  projectId       String
+  sceneId         String?
+  /// image | video
+  kind            String
+  prompt          String
+  negativePrompt  String?
+  aspectRatio     String
+  width           Int?
+  height          Int?
+  durationSec     Float?
+  styleNotes      String   @default("")
+  purpose         String   @default("")
+  /// AssetBrief (zod: AssetBriefSchema): composition-aware creative brief the generation must serve.
+  brief           Json?
+  count           Int      @default(1)
+  /// requested | generating | generated | approved | rejected | cancelled
+  status          String   @default("requested")
+  /// user | claude
+  requestedBy     String   @default("user")
+  approvedAssetId String?
+  feedback        String?
+  error           String?
+  attempt         Int      @default(1)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  scene   Scene?  @relation(fields: [sceneId], references: [id], onDelete: SetNull)
+  assets  Asset[]
+
+  @@index([projectId, status])
+}
+
+/// Music / SFX placed on the timeline. The voice-over is always the primary track (Project.mix).
+model AudioTrack {
+  id             String   @id @default(cuid())
+  projectId      String
+  assetId        String
+  /// music | sfx
+  kind           String
+  name           String
+  startSec       Float    @default(0)
+  trimStartSec   Float    @default(0)
+  durationSec    Float?
+  volume         Float    @default(0.5)
+  fadeInSec      Float    @default(0)
+  fadeOutSec     Float    @default(0)
+  muted          Boolean  @default(false)
+  loop           Boolean  @default(false)
+  duckUnderVoice Boolean  @default(false)
+  order          Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  asset   Asset   @relation(fields: [assetId], references: [id], onDelete: Cascade)
+}
+
+/// Image or video on the overlay track: drawn above the scenes, placed in absolute video time
+/// (independent of scene boundaries — the voice-over still owns scene timing).
+model OverlayClip {
+  id           String   @id @default(cuid())
+  projectId    String
+  assetId      String
+  name         String
+  /// fullscreen | framed | pip
+  placement    String   @default("fullscreen")
+  /// cover | contain
+  fit          String   @default("cover")
+  /// Seconds on the video timeline where the clip appears, and how long it stays.
+  startSec     Float    @default(0)
+  durationSec  Float
+  /// Video: seconds into the source where playback starts and stops (null = the end of the source).
+  trimStartSec Float    @default(0)
+  trimEndSec   Float?
+  playbackRate Float    @default(1)
+  /// Video on screen longer than its trimmed part: hold (last frame) | loop
+  endBehavior  String   @default("hold")
+  /// Clip audio (0 = muted — the voice-over is primary).
+  volume       Float    @default(0)
+  /// Lower the clip's audio while the narrator speaks.
+  duckUnderVoice Boolean @default(false)
+  /// Darkening overlay 0..0.9.
+  dim          Float    @default(0)
+  opacity      Float    @default(1)
+  fadeInSec    Float    @default(0.3)
+  fadeOutSec   Float    @default(0.3)
+  hidden       Boolean  @default(false)
+  /// Zoom regions (OverlayZoom[]): zoom/pan into areas of the clip over time, in clip seconds.
+  zooms        Json     @default("[]")
+  /// Crop (Crop | null): fractions cut from each edge of the media.
+  crop         Json?
+  /// Speed ramps and freeze frames (SpeedSegment[]) in clip seconds.
+  speedSegments Json    @default("[]")
+  /// Blur, boxes, arrows, labels, spotlights and click ripples (Annotation[]) in clip seconds.
+  annotations  Json     @default("[]")
+  order        Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  asset   Asset   @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, order])
+}
+
+/// Render history. Each row is one render version.
+model Render {
+  id              String    @id
+  projectId       String
+  /// final | preview | scene | range
+  kind            String
+  /// queued | bundling | rendering | encoding | complete | failed | cancelled
+  status          String    @default("queued")
+  progress        Float     @default(0)
+  stage           String?
+  label           String    @default("")
+  settings        Json
+  outputPath      String?
+  thumbnailPath   String?
+  sizeBytes       Int?
+  durationSec     Float?
+  renderedFrames  Int?
+  totalFrames     Int?
+  /// Hash of every input Remotion consumes; a render is stale when this differs from the project's current hash.
+  compositionHash String
+  error           Json?
+  jobId           String?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+}
+
+/// Background work executed by the worker process (voice generation, alignment, renders, exports).
+model Job {
+  id              String    @id
+  projectId       String?
+  type            String
+  /// queued | running | succeeded | failed | cancelled
+  status          String    @default("queued")
+  progress        Float     @default(0)
+  stage           String?
+  payload         Json
+  result          Json?
+  error           Json?
+  attempts        Int       @default(0)
+  cancelRequested Boolean   @default(false)
+  workerId        String?
+  heartbeatAt     DateTime?
+  createdAt       DateTime  @default(now())
+  startedAt       DateTime?
+  finishedAt      DateTime?
+
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([projectId, createdAt])
+}
+
+/// An explicit, reviewable task for Claude Code (the AI operator).
+model AiTask {
+  id              String    @id
+  projectId       String
+  /// analyze_script | generate_storyboard | regenerate_scenes | edit_scene | scene_alternatives | generate_assets | plan_creative | creative_review | refine_creative | command
+  type            String
+  /// pending | running | completed | failed | cancelled
+  status          String    @default("pending")
+  title           String
+  instruction     String    @default("")
+  /// { sceneIds?, sceneKeys?, skippedLocked?, keepTiming, keepVoice, section?, count?, reviewId?, issueIds? }
+  scope           Json      @default("{}")
+  contextRevision Int       @default(0)
+  /// manual (interactive Claude Code session) | headless (claude -p spawned by the worker)
+  executor        String?
+  log             Json      @default("[]")
+  resultSummary   String?
+  error           String?
+  claimedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, status])
+}
+
+/// Project creative plan revision (direction, story arc, visual language, distribution, asset strategy, references). The highest version is current.
+model CreativeRevision {
+  id        String   @id @default(cuid())
+  projectId String
+  version   Int
+  /// claude | user | file | restore
+  source    String
+  note      String   @default("")
+  /// CreativePlan (zod: CreativePlanSchema)
+  data      Json
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, version])
+}
+
+/// A written creative review (Creative QA). Scores are advisory; the issues carry the critique and a status workflow.
+model CreativeReview {
+  id                String   @id
+  projectId         String
+  version           Int
+  /// claude | user
+  source            String   @default("claude")
+  title             String   @default("")
+  request           String   @default("")
+  summary           String
+  overallScore      Int?
+  /// { composition?, typography?, motion?, pacing?, storytelling?, consistency?, brand? } 0–100
+  scores            Json     @default("{}")
+  strengths         Json     @default("[]")
+  /// ReviewIssue[] with ids and status (open | accepted | dismissed | resolved)
+  issues            Json     @default("[]")
+  /// Scene keys the review covered ([] = whole video)
+  scope             Json     @default("[]")
+  weakestScenes     Json     @default("[]")
+  basedOn           Json?
+  /// Summary of the measured creative metrics when the review was saved
+  measured          Json?
+  compositionHash   String?
+  storyboardVersion Int?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, version])
+  @@index([projectId, createdAt])
+}
+
+/// Named project version: full normalized state (binaries referenced by path/hash).
+model ProjectSnapshot {
+  id        String   @id @default(cuid())
+  projectId String
+  version   Int
+  label     String
+  reason    String   @default("manual")
+  data      Json
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, version])
+}
+
+/// One undoable editing step (Scenes/Timeline undo & redo): the before/after state of only the
+/// scenes, overlay clips and markers the edit changed. Each actor has its own linear history.
+model EditStep {
+  id          String   @id @default(cuid())
+  projectId   String
+  /// user | claude | …
+  actor       String
+  label       String
+  /// Consecutive edits with the same key (e.g. repeated tweaks of one overlay field) merge into one step.
+  coalesceKey String?
+  /// EditChanges (src/core/history/edit-steps.ts)
+  changes     Json
+  undone      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, actor, createdAt])
+}
+
+/// Reviewable log of every significant mutation and who made it.
+model Activity {
+  id        String   @id @default(cuid())
+  projectId String
+  /// user | claude | system | file | worker
+  actor     String
+  type      String
+  message   String
+  data      Json?
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+}
+
+/// A rejected external edit of a .project/ file (invalid JSON, schema error, locked scene...).
+model SyncIssue {
+  id        String   @id @default(cuid())
+  projectId String
+  file      String
+  message   String
+  details   Json?
+  resolved  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, resolved])
+}
+
+/// Non-secret application settings. Secrets live in storage/config/secrets.json or env.
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}

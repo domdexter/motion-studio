@@ -1,0 +1,26 @@
+# Local infrastructure only. The app itself, Remotion and Claude Code run on the host
+# so they keep direct access to the project filesystem.
+name: motion-studio
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: motion-studio-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: studio
+      POSTGRES_PASSWORD: studio_local_dev
+      POSTGRES_DB: motion_studio
+    ports:
+      # Bound to loopback only — never exposed to the network.
+      - "127.0.0.1:5488:5432"
+    volumes:
+      - motion-studio-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U studio -d motion_studio"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  motion-studio-pgdata:
